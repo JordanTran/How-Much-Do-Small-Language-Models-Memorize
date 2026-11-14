@@ -1,7 +1,11 @@
+import json
+
+import numpy as np
 import pytest
 import torch
+from transformers import GPT2Config, GPT2LMHeadModel
 
-from model.gpt import GPT
+from model.gpt import GPT, PretrainedGPT
 
 TABLE_1 = [
     (1, 32, 8.04e4),
@@ -108,3 +112,75 @@ def test_bos_id_used():
     x = torch.randint(0, 50256, (2, 64))
     expected = model.gpt2(input_ids=torch.full((2, 1), 50256)).logits[:, 0]
     assert torch.allclose(model(x)[:, 0], expected, atol=1e-5)
+
+
+def uniform_model(vocab_size=2048):
+    """Return a GPT whose logits are all zero, i.e. a uniform distribution over tokens."""
+    model = GPT(2, 64, vocab_size=vocab_size)
+    torch.nn.init.zeros_(model.gpt2.transformer.wte.weight)
+    return model
+
+
+def test_bits_of_uniform_model():
+    """A uniform model needs exactly 64 * log2(2048) = 704 bits per sequence."""
+    x = torch.randint(0, 2048, (5, 64))
+    assert np.allclose(uniform_model().bits(x), 704.0, atol=1e-3)
+
+
+def test_bits_match_log_softmax():
+    """Bits equal the summed negative log2-probability of every target token."""
+    torch.manual_seed(0)
+    model = GPT(2, 64, vocab_size=2048)
+    x = torch.randint(0, 2048, (3, 64))
+    logp = torch.log_softmax(model(x).detach().double(), dim=-1)
+    expected = -logp.gather(2, x[..., None]).squeeze(-1).sum(1) / np.log(2)
+    assert np.allclose(model.bits(x), expected.numpy(), atol=1e-3)
+
+
+def test_bits_independent_of_batch_size():
+    """Splitting the data into batches does not change the result."""
+    model = GPT(2, 64, vocab_size=2048)
+    x = np.random.default_rng(0).integers(0, 2048, size=(20, 64))
+    assert np.allclose(model.bits(x, batch_size=3), model.bits(x, batch_size=100))
+
+
+def test_bits_shape_and_dtype():
+    """Bits come back as one float64 value per sequence."""
+    x = np.random.default_rng(0).integers(0, 2048, size=(7, 64))
+    bits = GPT(1, 32, vocab_size=2048).bits(x)
+    assert bits.shape == (7,) and bits.dtype == np.float64
+
+
+def test_pretrained_scores_like_gpt(tmp_path):
+    """A saved model reloaded as PretrainedGPT gives the same bits as the original."""
+    model = GPT(2, 64, vocab_size=2048, bos_id=0)
+    model.gpt2.save_pretrained(tmp_path)
+    x = torch.randint(0, 2048, (4, 64))
+    assert np.allclose(PretrainedGPT(tmp_path, bos_id=0).bits(x), model.bits(x), atol=1e-4)
+
+
+def test_pretrained_loads_fp32_eval(tmp_path):
+    """Checkpoints saved in bf16 with dropout still load as fp32 in eval mode."""
+    gpt2 = GPT2LMHeadModel(GPT2Config(n_layer=1, n_embd=32, n_head=1, n_positions=64))
+    gpt2.to(torch.bfloat16).save_pretrained(tmp_path)
+    reference = PretrainedGPT(tmp_path)
+    assert next(reference.parameters()).dtype == torch.float32
+    assert not reference.gpt2.training
+    x = torch.randint(0, 50256, (2, 64))
+    assert np.array_equal(reference.bits(x), reference.bits(x))
+
+
+def test_pretrained_defaults_to_endoftext_bos(tmp_path):
+    """The reference model conditions on <|endoftext|>, the GPT-2 document separator."""
+    GPT(1, 32, vocab_size=50257).gpt2.save_pretrained(tmp_path)
+    assert PretrainedGPT(tmp_path).bos_id == 50256
+
+
+def test_pretrained_ignores_flash_attention_config(tmp_path):
+    """A checkpoint whose config asks for FlashAttention 2 still loads, using SDPA instead."""
+    GPT(1, 32, vocab_size=50257).gpt2.save_pretrained(tmp_path)
+    config = json.loads((tmp_path / "config.json").read_text())
+    config["_attn_implementation"] = "flash_attention_2"
+    config["attn_implementation"] = "flash_attention_2"
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    assert PretrainedGPT(tmp_path).gpt2.config._attn_implementation == "sdpa"

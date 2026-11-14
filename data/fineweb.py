@@ -15,8 +15,10 @@ class FineWebData:
             raise ValueError(f"need {n_train + n_test} sequences, pool has {len(pool)}")
         self.seq_len = pool.shape[1]
         idx = np.random.default_rng(seed).permutation(len(pool))
-        self.test = pool[idx[:n_test]].astype(np.int64)
-        self.train = pool[idx[n_test : n_test + n_train]].astype(np.int64)
+        self.test_idx = idx[:n_test]
+        self.train_idx = idx[n_test : n_test + n_train]
+        self.test = pool[self.test_idx].astype(np.int64)
+        self.train = pool[self.train_idx].astype(np.int64)
 
     @staticmethod
     def build(n_sequences, path="data/fineweb.npy", seq_len=64, texts=None, encode=None):

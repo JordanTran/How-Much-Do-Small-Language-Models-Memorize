@@ -105,3 +105,12 @@ def test_split_raises_when_pool_too_small(tmp_path):
     """Asking for more sequences than the pool holds fails loudly."""
     with pytest.raises(ValueError, match="pool has 1000"):
         FineWebData(n_train=1000, n_test=1, path=make_pool(tmp_path))
+
+
+def test_split_indices_point_into_pool(tmp_path):
+    """train_idx and test_idx give the pool rows used for each split."""
+    path = make_pool(tmp_path)
+    data = FineWebData(n_train=300, n_test=100, path=path)
+    pool = np.load(path)
+    assert np.array_equal(pool[data.train_idx], data.train)
+    assert np.array_equal(pool[data.test_idx], data.test)
