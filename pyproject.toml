@@ -3,7 +3,9 @@ name = "llm-memorization"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "datasets>=3.0",
     "numpy>=2.2",
+    "tiktoken>=0.8",
 ]
 
 [dependency-groups]
