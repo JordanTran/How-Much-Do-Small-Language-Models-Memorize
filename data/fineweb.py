@@ -23,7 +23,7 @@ class FineWebData:
         """Truncate FineWeb documents to their first seq_len tokens, drop duplicates, and save."""
         if texts is None:
             stream = load_dataset(
-                "HuggingFaceFW/fineweb", name="sample-10BT", split="train", streaming=True
+                "HuggingFaceFW/fineweb", name="sample-350BT", split="train", streaming=True
             )
             texts = (row["text"] for row in stream)
         if encode is None:
